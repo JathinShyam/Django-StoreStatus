@@ -5,6 +5,15 @@ from .models import StoreStatus, BusinessHours, Timezone, StatusReport
 from django.http import HttpResponse
 from django.http import JsonResponse
 from .forms import ReportGenerationForm
+from datetime import timedelta
+from django.db.models import QuerySet
+# from django.db.models import Count
+# import pytz
+# import random
+import secrets
+# from django.views.decorators.csrf import csrf_exempt
+# from django.views.decorators.http import require_POST, require_GET
+# from django.shortcuts import get_object_or_404
 
 def populate_store_status(request):
     with open('store_status.csv', 'r') as csv_file:
@@ -53,7 +62,8 @@ def populate_timezone(request):
             )
         return HttpResponse('Imported Successfully!')
         
-
+def generate_report_id():
+    return secrets.token_hex(16)
 
 
 def generate_report(store_id, timestamp):
@@ -62,8 +72,13 @@ def generate_report(store_id, timestamp):
     store_id = store_id
     
     # Retrieve business hours and status data for the given store_id and timestamp
-    business_hours = get_business_hours(store_id)
+    day_of_week = timestamp.weekday()
+    print("***************")
+    print(day_of_week)
+    print("***************")
+    business_hours = get_business_hours(store_id, day_of_week)
     status_data = get_status_data(store_id, timestamp)
+    
     
     # Calculate uptime and downtime
     uptime_last_hour = calculate_uptime_last_hour(status_data, business_hours, timestamp)
@@ -72,10 +87,22 @@ def generate_report(store_id, timestamp):
     downtime_last_hour = calculate_downtime_last_hour(status_data, business_hours, timestamp)
     downtime_last_day = calculate_downtime_last_day(status_data, business_hours, timestamp)
     downtime_last_week = calculate_downtime_last_week(status_data, business_hours, timestamp)
+    if uptime_last_hour == 0:
+        downtime_last_hour = 60
+    if uptime_last_day == 0:
+        downtime_last_day = 24
+    if uptime_last_week == 0:
+        downtime_last_week = 168
+    if downtime_last_hour == 0:
+        uptime_last_hour = 60
+    if downtime_last_day == 0:
+        uptime_last_day = 24
+    if downtime_last_week == 0:
+        uptime_last_week = 168
 
     # Save the report to the database
     report = StatusReport.objects.create(
-        report_id = f"{store_id}_{timestamp}",
+        report_id = generate_report_id(),
         store_id=store_id,
         uptime_last_hour=uptime_last_hour,
         uptime_last_day=uptime_last_day,
@@ -87,16 +114,17 @@ def generate_report(store_id, timestamp):
 
     return report.report_id
 
-def get_business_hours(store_id):
-    business_hours = BusinessHours.objects.filter(store_id=store_id)
+def get_business_hours(store_id, day_of_week):
+    business_hours = BusinessHours.objects.filter(store_id=store_id, day_of_week = day_of_week)
+    print(type(business_hours))
     if not business_hours:
         a = BusinessHours.objects.create(
             store_id=store_id,
-            day_of_week=0,
+            day_of_week=day_of_week,
             start_time_local=datetime.strptime('00:00:00', '%H:%M:%S').time(),
-            end_time_local=datetime.strptime('23:00:00', '%H:%M:%S').time(),
+            end_time_local=datetime.strptime('23:59:59', '%H:%M:%S').time(),
         )
-        return a
+        return QuerySet([a])
     return business_hours
 
 def get_status_data(store_id, timestamp):
@@ -104,62 +132,78 @@ def get_status_data(store_id, timestamp):
     return status_data
 
 def calculate_uptime_last_hour(status_data, business_hours, timestamp):
-    active_count_last_hour = status_data.filter(
-        status='active',
-        timestamp_utc__gte=timestamp - timedelta(hours=1),
-        timestamp_utc__lte=timestamp,
-        # timestamp_utc__time__range=(business_hours.start_time_local, business_hours.end_time_local)
-    ).count()
-    return active_count_last_hour * 60  # Convert to minutes
+    counter = 0
+    for i in business_hours:
+        active_count_last_hour = status_data.filter(
+            status='active',
+            timestamp_utc__gte=timestamp - timedelta(hours=1),
+            timestamp_utc__lte=timestamp,
+            timestamp_utc__time__range=(i.start_time_local, i.end_time_local)
+        ).count()
+        counter += active_count_last_hour
+    return counter
 
 
-from datetime import timedelta
 
 def calculate_uptime_last_day(status_data, business_hours, timestamp):
-    active_count_last_day = status_data.filter(
-        status='active',
-        timestamp_utc__gte=timestamp - timedelta(days=1),
-        timestamp_utc__lte=timestamp,
-        # timestamp_utc__time__range=(business_hours.start_time_local, business_hours.end_time_local)
-    ).count()
-    return active_count_last_day * 60  # Convert to minutes
+    counter = 0
+    for i in business_hours:
+        active_count_last_day = status_data.filter(
+            status='active',
+            timestamp_utc__gte=timestamp - timedelta(days=1),
+            timestamp_utc__lte=timestamp,
+            timestamp_utc__time__range=(i.start_time_local, i.end_time_local)
+        ).count()
+        counter += active_count_last_day 
+    return counter
 
 def calculate_uptime_last_week(status_data, business_hours, timestamp):
-    active_count_last_week = status_data.filter(
-        status='active',
-        timestamp_utc__gte=timestamp - timedelta(weeks=1),
-        timestamp_utc__lte=timestamp,
-        # timestamp_utc__time__range=(business_hours.start_time_local, business_hours.end_time_local)
-    ).count()
-    return active_count_last_week * 60  # Convert to minutes
+    counter = 0
+    for i in business_hours:
+        active_count_last_week = status_data.filter(
+            status='active',
+            timestamp_utc__gte=timestamp - timedelta(weeks=1),
+            timestamp_utc__lte=timestamp,
+            timestamp_utc__time__range=(i.start_time_local, i.end_time_local)
+        ).count()
+        counter += active_count_last_week 
+    return counter
 
 def calculate_downtime_last_hour(status_data, business_hours, timestamp):
-    inactive_count_last_hour = status_data.filter(
-        status='inactive',
-        timestamp_utc__gte=timestamp - timedelta(hours=1),
-        timestamp_utc__lte=timestamp,
-        # timestamp_utc__time__range=(business_hours.start_time_local, business_hours.end_time_local)
-    ).count()
-    return inactive_count_last_hour * 60  # Convert to minutes
+    counter = 0
+    for i in business_hours:
+        inactive_count_last_hour = status_data.filter(
+            status='inactive',
+            timestamp_utc__gte=timestamp - timedelta(hours=1),
+            timestamp_utc__lte=timestamp,
+            timestamp_utc__time__range=(i.start_time_local, i.end_time_local)
+        ).count()
+        counter += inactive_count_last_hour
+    return counter
 
 def calculate_downtime_last_day(status_data, business_hours, timestamp):
-    inactive_count_last_day = status_data.filter(
-        status='inactive',
-        timestamp_utc__gte=timestamp - timedelta(days=1),
-        timestamp_utc__lte=timestamp,
-        # timestamp_utc__time__range=(business_hours.start_time_local, business_hours.end_time_local)
-    ).count()
-    return inactive_count_last_day * 60  # Convert to minutes
+    counter = 0
+    for i in business_hours:
+        inactive_count_last_day = status_data.filter(
+            status='inactive',
+            timestamp_utc__gte=timestamp - timedelta(days=1),
+            timestamp_utc__lte=timestamp,
+            timestamp_utc__time__range=(i.start_time_local, i.end_time_local)
+        ).count()
+        counter += inactive_count_last_day 
+    return counter
 
 def calculate_downtime_last_week(status_data, business_hours, timestamp):
-    inactive_count_last_week = status_data.filter(
-        status='inactive',
-        timestamp_utc__gte=timestamp - timedelta(weeks=1),
-        timestamp_utc__lte=timestamp,
-        # timestamp_utc__time__range=(business_hours.start_time_local, business_hours.end_time_local)
-    ).count()
-    return inactive_count_last_week * 60  # Convert to minutes
-
+    counter = 0
+    for i in business_hours:
+        inactive_count_last_week = status_data.filter(
+            status='inactive',
+            timestamp_utc__gte=timestamp - timedelta(weeks=1),
+            timestamp_utc__lte=timestamp,
+            timestamp_utc__time__range=(i.start_time_local, i.end_time_local)
+        ).count()
+        counter += inactive_count_last_week 
+    return counter
 
 
 
@@ -186,6 +230,7 @@ def get_report(request, report_id):
         report = StatusReport.objects.get(report_id=report_id)
         # Return the report details in the specified format
         report_data = {
+            "status": "Complete",
             "store_id": report.store_id,
             "uptime_last_hour": report.uptime_last_hour,
             "uptime_last_day": report.uptime_last_day,
@@ -196,4 +241,99 @@ def get_report(request, report_id):
         }
         return JsonResponse(report_data)
     except StatusReport.DoesNotExist:
-        return JsonResponse({"error": "Report not found"}, status=404)
+        return JsonResponse({"status": "Running"})
+    
+
+
+
+# def convert_utc_to_local(utc_time, timezone_str):
+#     utc = pytz.timezone('UTC')
+#     local_timezone = pytz.timezone(timezone_str)
+#     utc_time = utc.localize(utc_time)
+#     local_time = utc_time.astimezone(local_timezone)
+#     return local_time
+
+
+# def compute_metrics(store_id, store_activity_data, business_hours_data, timezone_data):
+#     # Filter data for the specific store
+#     store_activity_data = store_activity_data.filter(store_id=store_id)
+
+#     # Get the local timezone for the store
+#     timezone_str = timezone_data.get(store_id, 'America/Chicago')
+
+#     # Initialize metrics
+#     uptime_last_hour = downtime_last_hour = uptime_last_day = downtime_last_day = uptime_last_week = downtime_last_week = 0
+
+#     # Get the current timestamp (assumed to be the max timestamp among all observations)
+#     current_timestamp = store_activity_data.aggregate(max_timestamp=Count('timestamp_utc'))['max_timestamp']
+
+#     # Iterate over the store activity data
+#     for observation in store_activity_data:
+#         timestamp_utc = observation.timestamp_utc
+#         status = observation.status
+
+#         # Convert UTC timestamp to local time
+#         local_timestamp = convert_utc_to_local(timestamp_utc, timezone_str)
+
+#         # Check if the observation falls within business hours
+#         business_hours = business_hours_data.get(store_id, {})
+#         if (
+#             local_timestamp.weekday() == business_hours.get('day_of_week', local_timestamp.weekday())
+#             and business_hours.get('start_time_local') <= local_timestamp.time() <= business_hours.get('end_time_local')
+#         ):
+#             # Calculate time difference between the current timestamp and the observation timestamp
+#             time_difference = current_timestamp - timestamp_utc
+
+#             # Update metrics based on status
+#             if status == 'active':
+#                 uptime_last_hour += time_difference.total_seconds() / 60
+#                 uptime_last_day += time_difference.total_seconds() / 3600
+#                 uptime_last_week += time_difference.total_seconds() / 3600
+#             elif status == 'inactive':
+#                 downtime_last_hour += time_difference.total_seconds() / 60
+#                 downtime_last_day += time_difference.total_seconds() / 3600
+#                 downtime_last_week += time_difference.total_seconds() / 3600
+
+#     metrics_data = {
+#         'uptime_last_hour': round(uptime_last_hour, 2),
+#         'uptime_last_day': round(uptime_last_day, 2),
+#         'uptime_last_week': round(uptime_last_week, 2),
+#         'downtime_last_hour': round(downtime_last_hour, 2),
+#         'downtime_last_day': round(downtime_last_day, 2),
+#         'downtime_last_week': round(downtime_last_week, 2),
+#     }
+
+#     return metrics_data
+
+
+# @csrf_exempt
+# @require_POST
+# def trigger_report(request):
+#     # Your logic for data ingestion and report generation goes here...
+#     # Make sure to populate the StatusReport model with the calculated metrics
+
+#     report_id = generate_report_id()
+    
+#     # Assuming store_id, store_activity_data, business_hours_data, and timezone_data are available
+#     for store_id in store_ids:
+#         store_activity_data = StoreStatus.objects.filter(store_id=store_id)
+#         business_hours_data = BusinessHours.objects.filter(store_id=store_id)
+#         timezone_data = Timezone.objects.filter(store_id=store_id).first()
+
+#         metrics_data = compute_metrics(store_id, store_activity_data, business_hours_data, timezone_data.timezone_str)
+
+#         # Create or update StatusReport model
+#         report, created = StatusReport.objects.update_or_create(
+#             store_id=store_id,
+#             defaults={
+#                 'uptime_last_hour': metrics_data['uptime_last_hour'],
+#                 'uptime_last_day': metrics_data['uptime_last_day'],
+#                 'uptime_last_week': metrics_data['uptime_last_week'],
+#                 'downtime_last_hour': metrics_data['downtime_last_hour'],
+#                 'downtime_last_day': metrics_data['downtime_last_day'],
+#                 'downtime_last_week': metrics_data['downtime_last_week'],
+#             }
+#         )
+
+#     return JsonResponse({'report_id': report_id})
+
