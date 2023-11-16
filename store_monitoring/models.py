@@ -6,7 +6,7 @@ class StoreStatus(models.Model):
     status = models.CharField(max_length=10)  # 'active' or 'inactive'
 
     def __str__(self):
-        return f"Report {self.store_id}"
+        return f"Report {self.store_id} {self.timestamp_utc}"
 
 
 class BusinessHours(models.Model):
@@ -16,7 +16,7 @@ class BusinessHours(models.Model):
     end_time_local = models.TimeField()
 
     def __str__(self):
-        return f"Report {self.store_id}"
+        return f"Report {self.store_id} {self.day_of_week}"
 
 
 class Timezone(models.Model):
@@ -37,4 +37,4 @@ class StatusReport(models.Model):
     downtime_last_week = models.IntegerField()
 
     def __str__(self):
-        return f"Report {self.report_id}"
+        return f"Report {self.report_id} {self.store_id}"
