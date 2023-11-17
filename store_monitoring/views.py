@@ -7,14 +7,8 @@ from django.http import JsonResponse
 from .forms import ReportGenerationForm
 from datetime import timedelta
 from django.db.models import QuerySet
-# from django.db.models import Count
 import pytz
-# import random
 import secrets
-# from django.views.decorators.csrf import csrf_exempt
-# from django.views.decorators.http import require_POST, require_GET
-# from django.shortcuts import get_object_or_404
-from django.db.models import Sum, ExpressionWrapper, fields,F
 
 def populate_store_status(request):
     with open('store_status.csv', 'r') as csv_file:
@@ -28,6 +22,7 @@ def populate_store_status(request):
                 # Handle variations in timestamp format
                 timestamp_utc = datetime.strptime(timestamp_utc, '%Y-%m-%d %H:%M:%S %Z')
 
+            # We will create an object if does't exists
             StoreStatus.objects.get_or_create(
                 store_id=store_id,
                 timestamp_utc=timestamp_utc,
@@ -42,6 +37,8 @@ def populate_business_hours(request):
         next(csv_reader)  # Skip header row
         for row in csv_reader:
             store_id, day_of_week, start_time_local, end_time_local = row
+
+            # We will create an object if does't exists
             BusinessHours.objects.get_or_create(
                 store_id=store_id,
                 day_of_week=day_of_week,
@@ -59,6 +56,8 @@ def populate_timezone(request):
         next(csv_reader)  # Skip header row
         for row in csv_reader:
             store_id, timezone_str = row
+
+            # We will create an object if does't exists
             Timezone.objects.get_or_create(
                 store_id=store_id,
                 defaults={'timezone_str': timezone_str}
@@ -70,22 +69,14 @@ def generate_report_id():
     return secrets.token_hex(16)
 
 
-def generate_report(store_id, timestamp):
+def generate_report(store_id, timestamp = datetime.now()):
 
     store_id = store_id
     
     # Retrieve business hours and status data for the given store_id and timestamp
-    day_of_week = timestamp.weekday()
-    print("***************")
-    print(day_of_week)
-    print("***************")
-    business_hours = get_business_hours(store_id, day_of_week)
-    
-    status_data = get_status_data(store_id, timestamp)
-    # print("***************")
-    # print(status_data)
-    # print("***************")
-    
+    day_of_week = timestamp.weekday() # Generates the weekday code of the day
+    business_hours = get_business_hours(store_id, day_of_week) # Retrive business hours of the given day
+    status_data = get_status_data(store_id, timestamp)  # Retrive store status for the timestamp
     
     # Calculate uptime and downtime
     uptime_last_hour = calculate_uptime_last_hour(status_data, business_hours, timestamp)
@@ -95,28 +86,15 @@ def generate_report(store_id, timestamp):
         day_of_week = 6
     else:
         day_of_week -= 1
-    business_hours = business_hours.union(get_business_hours(store_id, day_of_week))
+    
+    # Adding previous day business hours for the calculation
+    business_hours = business_hours.union(get_business_hours(store_id, day_of_week)) 
 
-    # print("***************")
-    # for i in business_hours:
-    #     print(i.start_time_local)
-    #     print(i.end_time_local)
-    #     # Convert time objects to datetime objects
-    #     start_datetime = datetime.combine(datetime.today(), i.start_time_local)
-    #     end_datetime = datetime.combine(datetime.today(), i.end_time_local)
-
-    #     # Calculate the time difference
-    #     time_difference = end_datetime - start_datetime
-    #     # Convert time difference to total seconds (as an integer)
-    #     total_seconds = int(time_difference.total_seconds())
-
-    #     print(time_difference)
-    #     print(total_seconds / 3600)
-    # print("***************")
-
+    # Calculating the uptime and downtime
     uptime_last_day = calculate_uptime_last_day(status_data, business_hours, timestamp)
     downtime_last_day = calculate_downtime_last_day(status_data, business_hours, timestamp)
 
+    # adding 1 week business hours for calculation
     for _ in range(5):
         if day_of_week == 0:
             day_of_week = 6
@@ -124,38 +102,8 @@ def generate_report(store_id, timestamp):
             day_of_week -= 1
         business_hours = business_hours.union(get_business_hours(store_id, day_of_week))
 
-    print("***************")
-    for i in business_hours:
-        print(i.start_time_local)
-        print(i.end_time_local)
-        # Convert time objects to datetime objects
-        start_datetime = datetime.combine(datetime.today(), i.start_time_local)
-        end_datetime = datetime.combine(datetime.today(), i.end_time_local)
-
-        # Calculate the time difference
-        time_difference = end_datetime - start_datetime
-        # Convert time difference to total seconds (as an integer)
-        total_seconds = int(time_difference.total_seconds())
-
-        print(time_difference)
-        print(total_seconds / 3600)
-    print("***************")
-
-
     uptime_last_week = calculate_uptime_last_week(status_data, business_hours, timestamp)
     downtime_last_week = calculate_downtime_last_week(status_data, business_hours, timestamp)
-    # if uptime_last_hour == 0:
-    #     downtime_last_hour = 60
-    # if uptime_last_day == 0:
-    #     downtime_last_day = 24
-    # if uptime_last_week == 0:
-    #     downtime_last_week = 168
-    # if downtime_last_hour == 0:
-    #     uptime_last_hour = 60
-    # if downtime_last_day == 0:
-    #     uptime_last_day = 24
-    # if downtime_last_week == 0:
-    #     uptime_last_week = 168
 
     # Save the report to the database
     report = StatusReport.objects.create(
@@ -174,7 +122,9 @@ def generate_report(store_id, timestamp):
 
 def get_business_hours(store_id, day_of_week) -> QuerySet:
     business_hours = BusinessHours.objects.filter(store_id=store_id, day_of_week = day_of_week)
-    # print(type(business_hours))
+
+    # If there is no store_id then assuming it runs for 24*7
+    # create a new BusinessHours for calculation
     if not business_hours:
         a = BusinessHours.objects.create(
             store_id=store_id,
@@ -188,6 +138,7 @@ def get_business_hours(store_id, day_of_week) -> QuerySet:
 def get_status_data(store_id, timestamp) -> QuerySet:
     status_data = StoreStatus.objects.filter(store_id=store_id, timestamp_utc__lte=timestamp)
     return status_data
+
 
 def calculate_uptime_last_hour(status_data, business_hours, timestamp) -> int:
     counter = 0
@@ -274,23 +225,19 @@ def trigger_report(request):
         if form.is_valid():
             store_id = form.cleaned_data['store_id']
             timestamp = form.cleaned_data['timestamp']
-
-            # timezone_str = Timezone.objects.get(store_id, "America/Chicago")
-            # local_timestamp = convert_utc_to_local(timestamp, timezone_str)
             
             try:
+                # Retriving the TimeZone object for the given store_id for conversion to local time
                 timezone_obj = Timezone.objects.get(store_id=store_id)
                 timezone_str = timezone_obj.timezone_str
-                print("***************")
-                print(timezone_str)
-                print(timestamp)
+                # Converting UTC to local time
                 local_timestamp = convert_utc_to_local(timestamp, timezone_str)
             except Timezone.DoesNotExist:
                 local_timestamp = convert_utc_to_local(timestamp, 'America/Chicago')
-            print(local_timestamp)
-            print("***************")
 
             report_id = generate_report(store_id, local_timestamp)
+
+            # TODO: Polling or batch processing
             return HttpResponse(f"Report generated successfully. Report ID: {report_id}")
     else:
         form = ReportGenerationForm()
@@ -334,88 +281,3 @@ def convert_utc_to_local(utc_time, timezone_str):
     utc_time = utc.localize(utc_time)
     local_time = utc_time.astimezone(local_timezone)
     return local_time
-
-
-# def compute_metrics(store_id, store_activity_data, business_hours_data, timezone_data):
-#     # Filter data for the specific store
-#     store_activity_data = store_activity_data.filter(store_id=store_id)
-
-#     # Get the local timezone for the store
-#     timezone_str = timezone_data.get(store_id, 'America/Chicago')
-
-#     # Initialize metrics
-#     uptime_last_hour = downtime_last_hour = uptime_last_day = downtime_last_day = uptime_last_week = downtime_last_week = 0
-
-#     # Get the current timestamp (assumed to be the max timestamp among all observations)
-#     current_timestamp = store_activity_data.aggregate(max_timestamp=Count('timestamp_utc'))['max_timestamp']
-
-#     # Iterate over the store activity data
-#     for observation in store_activity_data:
-#         timestamp_utc = observation.timestamp_utc
-#         status = observation.status
-
-#         # Convert UTC timestamp to local time
-#         local_timestamp = convert_utc_to_local(timestamp_utc, timezone_str)
-
-#         # Check if the observation falls within business hours
-#         business_hours = business_hours_data.get(store_id, {})
-#         if (
-#             local_timestamp.weekday() == business_hours.get('day_of_week', local_timestamp.weekday())
-#             and business_hours.get('start_time_local') <= local_timestamp.time() <= business_hours.get('end_time_local')
-#         ):
-#             # Calculate time difference between the current timestamp and the observation timestamp
-#             time_difference = current_timestamp - timestamp_utc
-
-#             # Update metrics based on status
-#             if status == 'active':
-#                 uptime_last_hour += time_difference.total_seconds() / 60
-#                 uptime_last_day += time_difference.total_seconds() / 3600
-#                 uptime_last_week += time_difference.total_seconds() / 3600
-#             elif status == 'inactive':
-#                 downtime_last_hour += time_difference.total_seconds() / 60
-#                 downtime_last_day += time_difference.total_seconds() / 3600
-#                 downtime_last_week += time_difference.total_seconds() / 3600
-
-#     metrics_data = {
-#         'uptime_last_hour': round(uptime_last_hour, 2),
-#         'uptime_last_day': round(uptime_last_day, 2),
-#         'uptime_last_week': round(uptime_last_week, 2),
-#         'downtime_last_hour': round(downtime_last_hour, 2),
-#         'downtime_last_day': round(downtime_last_day, 2),
-#         'downtime_last_week': round(downtime_last_week, 2),
-#     }
-
-#     return metrics_data
-
-
-# @csrf_exempt
-# @require_POST
-# def trigger_report(request):
-#     # Your logic for data ingestion and report generation goes here...
-#     # Make sure to populate the StatusReport model with the calculated metrics
-
-#     report_id = generate_report_id()
-    
-#     # Assuming store_id, store_activity_data, business_hours_data, and timezone_data are available
-#     for store_id in store_ids:
-#         store_activity_data = StoreStatus.objects.filter(store_id=store_id)
-#         business_hours_data = BusinessHours.objects.filter(store_id=store_id)
-#         timezone_data = Timezone.objects.filter(store_id=store_id).first()
-
-#         metrics_data = compute_metrics(store_id, store_activity_data, business_hours_data, timezone_data.timezone_str)
-
-#         # Create or update StatusReport model
-#         report, created = StatusReport.objects.update_or_create(
-#             store_id=store_id,
-#             defaults={
-#                 'uptime_last_hour': metrics_data['uptime_last_hour'],
-#                 'uptime_last_day': metrics_data['uptime_last_day'],
-#                 'uptime_last_week': metrics_data['uptime_last_week'],
-#                 'downtime_last_hour': metrics_data['downtime_last_hour'],
-#                 'downtime_last_day': metrics_data['downtime_last_day'],
-#                 'downtime_last_week': metrics_data['downtime_last_week'],
-#             }
-#         )
-
-#     return JsonResponse({'report_id': report_id})
-

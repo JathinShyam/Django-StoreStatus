@@ -38,3 +38,5 @@ class StatusReport(models.Model):
 
     def __str__(self):
         return f"Report {self.report_id} {self.store_id}"
+
+# TODO: Create a Store Model for Models optimization
